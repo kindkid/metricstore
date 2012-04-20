@@ -31,7 +31,6 @@ Or install it yourself as:
 
     # Configure...
     m.ttl_of_hours = 31_556_926 # 1 year, default
-    m.ttl_of_minutes = 86_400 # 24 hours, default
     m.ttl_of_group_members = 7200 # 2 hours, default
     m.list_threshold = 1000 # default
 

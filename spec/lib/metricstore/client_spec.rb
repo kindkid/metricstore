@@ -1,5 +1,6 @@
 require File.dirname(__FILE__) + '/../../spec_helper'
 require 'em-synchrony'
+require 'ruby-prof'
 
 module Metricstore
   describe Client do
@@ -17,21 +18,30 @@ module Metricstore
         EM.synchrony do
           @client.open
 
-          @n = 100
-          @n.times do
-            @client.counter(:what => "logins", :where => {:user => 'joe', :ip => '10.20.30.40'})
-            @client.counter(:what => "logins", :where => {:user => 'bob', :ip => '10.20.30.40'})
-            @client.counter(:what => "logins", :where => {:user => 'joe', :ip => '10.20.30.50'})
-            @client.counter(:what => "logouts", :where => {:user => 'joe', :ip => '10.20.30.40'})
+          @n = 10
+          profile_data = RubyProf.profile do
+            @n.times do
+              @client.counter(:what => "logins", :where => {:user => 'joe', :ip => '10.20.30.40'})
+              @client.counter(:what => "logins", :where => {:user => 'bob', :ip => '10.20.30.40'})
+              @client.counter(:what => "logins", :where => {:user => 'joe', :ip => '10.20.30.50'})
+              @client.counter(:what => "logouts", :where => {:user => 'joe', :ip => '10.20.30.40'})
 
-            @client.measure(:what => "load_time", :value => 340, :where => {:page => '/welcome/', :session_id => "h0zhmb1c-u1xfgw305e"})
-            @client.measure(:what => "load_time", :value => 501, :where => {:page => '/welcome/', :session_id => "h0zhmb2q-643dotlcgd"})
-            @client.measure(:what => "load_time", :value => 212, :where => {:page => '/welcome/', :session_id => "h0zhmb1c-u1xfgw305e"})
-            @client.measure(:what => "load_time", :value => 343, :where => {:page => '/welcome/', :session_id => "h0zhmb2q-643dotlcgd"})
+              @client.measure(:what => "load_time", :value => 340, :where => {:page => '/welcome/', :session_id => "h0zhmb1c-u1xfgw305e"})
+              @client.measure(:what => "load_time", :value => 501, :where => {:page => '/welcome/', :session_id => "h0zhmb2q-643dotlcgd"})
+              @client.measure(:what => "load_time", :value => 212, :where => {:page => '/welcome/', :session_id => "h0zhmb1c-u1xfgw305e"})
+              @client.measure(:what => "load_time", :value => 343, :where => {:page => '/welcome/', :session_id => "h0zhmb2q-643dotlcgd"})
+            end
           end
 
+          result_path = Pathname.new(__FILE__).join('..','..','..','..','profile').expand_path
+          result_path.join('calltree.data').open('w') do |f|
+            RubyProf::CallTreePrinter.new(profile_data).print(f)
+          end
+          result_path.join('graph.html').open('w') do |f|
+            RubyProf::GraphHtmlPrinter.new(profile_data).print(f)
+          end
 
-          EM.add_timer(1.2) do
+          EM.add_timer(0.1) do
 
             spec.run
 
@@ -60,7 +70,7 @@ module Metricstore
         @client.average(:when => "2012-04-13-17", :what => "load_time").should == 349.0
         @client.maximum(:when => "2012-04-13-17", :what => "load_time").should == 501
         @client.minimum(:when => "2012-04-13-17", :what => "load_time").should == 212
-        @client.stddev(:when => "2012-04-13-17", :what => "load_time").should == 102.45730818248154
+        @client.stddev(:when => "2012-04-13-17", :what => "load_time").should be_within(0.00000001).of 102.45730818248154
         @client.list(:when => "2012-04-13-17", :what => "load_time", :list => :page).should == ['/welcome/']
 
         @client.count_of_groups(:when => "2012-04-13-17", :what => "load_time", :group => :session_id).should == 2

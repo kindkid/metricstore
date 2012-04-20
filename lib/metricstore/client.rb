@@ -12,7 +12,6 @@ module Metricstore
     #                         Set this <= max_unhandled_errors.
     def initialize(opts={})
       @ttl_of_hours = 31_556_926 # 1 year
-      @ttl_of_minutes = 86_400 # 24 hours
       @ttl_of_group_members = 7200 # 2 hours
       @list_threshold = 1000
 
@@ -59,13 +58,7 @@ module Metricstore
       end
     end
 
-    def run
-      #TODO: start EM reactor if it's not already
-    end
-
     def open
-      #TODO: start EM reactor if it's not already. remember if we need to shut it down.
-      #check if a block was provided. if so, yield, and close before returning.
       @inserter.start!
       @incrementer.start!
       @range_updater.start!
@@ -82,7 +75,6 @@ module Metricstore
     end
 
     attr_accessor :ttl_of_hours
-    attr_accessor :ttl_of_minutes
     attr_accessor :ttl_of_group_members
     attr_accessor :list_threshold
 
@@ -93,25 +85,20 @@ module Metricstore
     # Time complexity of this method grows factorially with the size of the :where hash.
     def counter(args={})
       assert_open!
-      date = (args[:when] || Time.now).utc
-      ymdhm = ymdhm(date)
-      ymdh = ymdhm[0,4]
-      metric = required(args, :what)
-      where = args[:where] || {}
-      where.to_a.all_combinations do |dimensions|
-        key = counter_key(ymdh, metric, dimensions)
+      date = stringify_date((args[:when] || Time.now).utc)
+      metric = escape(required(args, :what).to_s)
+      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v)] }
+      where.all_combinations do |dimensions|
+        key = counter_key(date, metric, dimensions.map{|k,v,s| s}.join('&'))
         count_incrementer.increment(key, 1, ttl_of_hours)
-        key = counter_key(ymdhm, metric, dimensions)
-        count_incrementer.increment(key, 1, ttl_of_minutes)
       end
       where.size.times do |i|
-        where2 = where.to_a
-        list, dimension_value = where2.delete_at(i)
+        where2 = where.clone
+        list, dimension_value, _ = where2.delete_at(i)
+        list = escape(list)
         where2.all_combinations do |dimensions|
-          key = list_key(ymdh, metric, list, dimensions)
+          key = list_key(date, metric, list, dimensions.map{|k,v,s| s}.join('&'))
           inserter.insert(key, dimension_value, ttl_of_hours)
-          key = list_key(ymdhm, metric, list, dimensions)
-          inserter.insert(key, dimension_value, ttl_of_minutes)
         end
       end
     end
@@ -125,171 +112,146 @@ module Metricstore
     def measure(args={})
       assert_open!
       value = required(args, :value).to_i
-      date = (args[:when] || Time.now).utc
-      ymdhm = ymdhm(date)
-      ymdh = ymdhm[0,4]
-      metric = required(args, :what)
-      where = args[:where] || {}
-      where.to_a.all_combinations do |dimensions|
-        key = counter_key(ymdh, metric, dimensions)
-        count_incrementer.increment(key, 1, ttl_of_hours)
-        key = counter_key(ymdhm, metric, dimensions)
-        count_incrementer.increment(key, 1, ttl_of_minutes)
-        key = sum_key(ymdh, metric, dimensions)
-        incrementer.increment(key, value, ttl_of_hours)
-        key = sum_key(ymdhm, metric, dimensions)
-        incrementer.increment(key, value, ttl_of_minutes)
-        key = range_key(ymdh, metric, dimensions)
-        range_updater.update_range(key, value, ttl_of_hours)
-        key = range_key(ymdhm, metric, dimensions)
-        range_updater.update_range(key, value, ttl_of_minutes)
-        key = sumsqr_key(ymdh, metric, dimensions)
-        incrementer.increment(key, value*value, ttl_of_hours)
-        key = sumsqr_key(ymdhm, metric, dimensions)
-        incrementer.increment(key, value*value, ttl_of_minutes)
+      date = stringify_date((args[:when] || Time.now).utc)
+      metric = escape(required(args, :what).to_s)
+      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v)] }
+      where.all_combinations do |dimensions|
+        dimensions_string = dimensions.map{|k,v,s| s}.join('&')
+        suffix = build_key('', date, metric, dimensions_string)
+        count_incrementer.increment("count#{suffix}", 1, ttl_of_hours)
+        incrementer.increment("sum#{suffix}", value, ttl_of_hours)
+        range_updater.update_range("range#{suffix}", value, ttl_of_hours)
+        incrementer.increment("sumsqr#{suffix}", value*value, ttl_of_hours)
       end
       where.size.times do |i|
-        where2 = where.to_a
-        list, dimension_value = where2.delete_at(i)
+        where2 = where.clone
+        list, dimension_value, _ = where2.delete_at(i)
+        list = escape(list)
+        prefix = list_key(date, metric, list, '')
         where2.all_combinations do |dimensions|
-          key = list_key(ymdh, metric, list, dimensions)
+          key = "#{prefix}#{dimensions.map{|k,v,s| s}.join('&')}"
           inserter.insert(key, dimension_value, ttl_of_hours)
-          key = list_key(ymdhm, metric, list, dimensions)
-          inserter.insert(key, dimension_value, ttl_of_minutes)
         end
       end
     end
 
     def count(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = counter_key(parse_time_block(time_block), metric_name, dimensions)
-      result, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      result, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
       result || 0
     end
 
     def list(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      list_name = required(args, :list)
-      dimensions = args[:where] || {}
-      key = list_key(parse_time_block(time_block), metric_name, list_name, dimensions)
-      result, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      list_name = escape(required(args, :list).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      result, cas = kvstore.fetch(list_key(time_block, metric_name, list_name, dimensions))
       result || []
     end
 
     def sum(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = sum_key(parse_time_block(time_block), metric_name, dimensions)
-      result, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      result, cas = kvstore.fetch(sum_key(time_block, metric_name, dimensions))
       result || 0
     end
 
     def average(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      parsed_time_block = parse_time_block(time_block)
-      count, cas = kvstore.fetch(counter_key(parsed_time_block, metric_name, dimensions))
-      sum, cas = kvstore.fetch(sum_key(parsed_time_block, metric_name, dimensions))
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      count, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
+      sum, cas = kvstore.fetch(sum_key(time_block, metric_name, dimensions))
       return nil if count.nil? || sum.nil? || count == 0
       sum.to_f / count
     end
 
     def maximum(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = range_key(parse_time_block(time_block), metric_name, dimensions)
-      range, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      range, cas = kvstore.fetch(range_key(time_block, metric_name, dimensions))
       range.nil? ? nil : range[1]
     end
 
     def minimum(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = range_key(parse_time_block(time_block), metric_name, dimensions)
-      range, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      range, cas = kvstore.fetch(range_key(time_block, metric_name, dimensions))
       range.nil? ? nil : range[0]
     end
 
     def stddev(args={})
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      parsed_time_block = parse_time_block(time_block)
-      count, cas = kvstore.fetch(counter_key(parsed_time_block, metric_name, dimensions))
-      sum, cas = kvstore.fetch(sum_key(parsed_time_block, metric_name, dimensions))
-      sumsqr, cas = kvstore.fetch(sumsqr_key(parsed_time_block, metric_name, dimensions))
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      count, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
+      sum, cas = kvstore.fetch(sum_key(time_block, metric_name, dimensions))
+      sumsqr, cas = kvstore.fetch(sumsqr_key(time_block, metric_name, dimensions))
       return nil if count.nil? || sum.nil? || sumsqr.nil? || count == 0
       Math.sqrt(count * sumsqr - sum*sum) / count
     end
 
     def count_of_groups(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = group_counter_key(parse_time_block(time_block), metric_name, group, dimensions)
-      result, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      result, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
       result || 0
     end
 
     def sum_of_ranges(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = range_sum_key(parse_time_block(time_block), metric_name, group, dimensions)
-      result, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      result, cas = kvstore.fetch(range_sum_key(time_block, metric_name, group, dimensions))
       result || 0
     end
 
     def average_range(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      parsed_time_block = parse_time_block(time_block)
-      count, cas = kvstore.fetch(group_counter_key(parsed_time_block, metric_name, group, dimensions))
-      sum, cas = kvstore.fetch(range_sum_key(parsed_time_block, metric_name, group, dimensions))
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      count, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
+      sum, cas = kvstore.fetch(range_sum_key(time_block, metric_name, group, dimensions))
       return nil if count.nil? || sum.nil? || count == 0
       sum.to_f / count
     end
 
     def maximum_range(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = group_range_key(parse_time_block(time_block), metric_name, group, dimensions)
-      range, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      range, cas = kvstore.fetch(group_range_key(time_block, metric_name, group, dimensions))
       range.nil? ? nil : range[1]
     end
 
     def minimum_range(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      key = group_range_key(parse_time_block(time_block), metric_name, group, dimensions)
-      range, cas = kvstore.fetch(key)
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      range, cas = kvstore.fetch(group_range_key(time_block, metric_name, group, dimensions))
       range.nil? ? nil : range[0]
     end
 
     def stddev_of_ranges(args={})
-      group = required(args, :group)
+      group = escape(required(args, :group))
       time_block = required(args, :when)
-      metric_name = required(args, :what)
-      dimensions = args[:where] || {}
-      parsed_time_block = parse_time_block(time_block)
-      count, cas = kvstore.fetch(group_counter_key(parsed_time_block, metric_name, group, dimensions))
-      sum, cas = kvstore.fetch(range_sum_key(parsed_time_block, metric_name, group, dimensions))
-      sumsqr, cas = kvstore.fetch(range_sumsqr_key(parsed_time_block, metric_name, group, dimensions))
+      metric_name = escape(required(args, :what).to_s)
+      dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
+      count, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
+      sum, cas = kvstore.fetch(range_sum_key(time_block, metric_name, group, dimensions))
+      sumsqr, cas = kvstore.fetch(range_sumsqr_key(time_block, metric_name, group, dimensions))
       return nil if count.nil? || sum.nil? || sumsqr.nil? || count == 0
       Math.sqrt(count * sumsqr - sum*sum) / count
     end
@@ -312,56 +274,63 @@ module Metricstore
     attr_reader :max_unhandled_errors
     attr_reader :max_retry_delay_in_seconds
 
-    def ymdhm(date)
-      [date.year, date.month, date.day, date.hour, date.min]
+    def stringify_date(date)
+      date.strftime('%Y-%m-%d-%H')
     end
 
-    def parse_time_block(time_block)
-      time_block = time_block.split(/[ _\-\/\.\:]/) if time_block.is_a?(String)
-      time_block.map(&:to_i)
+    def build_key(prefix, date, metric, dimensions, list_group=nil)
+      key = ''
+      key << prefix
+      key << ':/'
+      key << date
+      key << '/'
+      key << metric
+      unless list_group.nil?
+        key << '/'
+        key << list_group
+      end
+      key << '?'
+      key << dimensions
+      key
     end
 
-    def stringify_time_block(time_block)
-      time_block.map{|t| '%02d' % t}.join('-')
+    def counter_key(date, metric, dimensions)
+      build_key('count', date, metric, dimensions)
     end
 
-    def stringify_dimensions(dimensions)
-      dimensions.sort.map{|k,v| CGI.escape(k.to_s) << '=' << CGI.escape(v.to_s)}.join('&')
+    def list_key(date, metric, list_name, dimensions)
+      build_key('list', date, metric, dimensions, list_name)
+    rescue Exception => e
+      puts e.message
+      puts e.backtrace
+      raise
     end
 
-    def counter_key(time_block, metric_name, dimensions={})
-      "count:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def sum_key(date, metric, dimensions)
+      build_key('sum', date, metric, dimensions)
     end
 
-    def list_key(time_block, metric_name, list_name, dimensions={})
-      "list:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}/#{CGI.escape(list_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def sumsqr_key(date, metric, dimensions)
+      build_key('sumsqr', date, metric, dimensions)
     end
 
-    def sum_key(time_block, metric_name, dimensions={})
-      "sum:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def range_key(date, metric, dimensions)
+      build_key('range', date, metric, dimensions)
     end
 
-    def sumsqr_key(time_block, metric_name, dimensions={})
-      "sumsqr:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def group_counter_key(date, metric, group_name, dimensions)
+      build_key('rangecount', date, metric, dimensions, group_name)
     end
 
-    def range_key(time_block, metric_name, dimensions={})
-      "range:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def group_range_key(date, metric, group_name, dimensions)
+      build_key('rangerange', date, metric, dimensions, group_name)
     end
 
-    def group_counter_key(time_block, metric_name, group_name, dimensions={})
-      "rangecount:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}/#{CGI.escape(group_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def range_sum_key(date, metric, group_name, dimensions)
+      build_key('rangesum', date, metric, dimensions, group_name)
     end
-
-    def group_range_key(time_block, metric_name, group_name, dimensions={})
-      "rangerange:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}/#{CGI.escape(group_name.to_s)}?#{stringify_dimensions(dimensions)}"
-    end
-
-    def range_sum_key(time_block, metric_name, group_name, dimensions={})
-      "rangesum:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}/#{CGI.escape(group_name.to_s)}?#{stringify_dimensions(dimensions)}"
-    end
-    def range_sumsqr_key(time_block, metric_name, group_name, dimensions={})
-      "rangesumsqr:/#{stringify_time_block(time_block)}/#{CGI.escape(metric_name.to_s)}/#{CGI.escape(group_name.to_s)}?#{stringify_dimensions(dimensions)}"
+    def range_sumsqr_key(date, metric, group_name, dimensions)
+      build_key('rangesumsqr', date, metric, dimensions, group_name)
     end
 
     def required(args, argument_name)
@@ -370,6 +339,10 @@ module Metricstore
 
     def assert_open!
       raise "Client has not been opened" unless @open
+    end
+
+    def escape(s)
+      CGI.escape(s.to_s)
     end
   end
 end

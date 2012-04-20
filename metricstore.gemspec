@@ -17,7 +17,6 @@ Gem::Specification.new do |gem|
 
   gem.add_dependency "couchbase", "~> 1.1.1"
   gem.add_dependency "eventmachine", "~> 1.0.0.beta.1"
-  gem.add_dependency "em-synchrony", "~> 1.0.1"
 
   gem.add_development_dependency "rspec", "~> 2.9.0"
   gem.add_development_dependency "simplecov", "~> 0.6.1"
@@ -26,4 +25,6 @@ Gem::Specification.new do |gem|
   gem.add_development_dependency "guard-bundler", "~> 0.1.3"
   gem.add_development_dependency "guard-rspec", "~> 0.7.0"
   gem.add_development_dependency "timecop", "~> 0.3.5"
+  gem.add_development_dependency "em-synchrony", "~> 1.0.1"
+  gem.add_development_dependency "ruby-prof", "~> 0.10.8"
 end
