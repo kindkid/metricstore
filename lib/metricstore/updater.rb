@@ -1,3 +1,5 @@
+require 'eventmachine'
+
 module Metricstore
 
   # Abstract class. Not thread-safe.
@@ -55,6 +57,8 @@ module Metricstore
     def backlog
       @pending_updates.size
     end
+
+    attr_accessor :handle_update_result
 
     protected
 
@@ -153,8 +157,10 @@ module Metricstore
     end
 
     def process_update(key, data, ttl, errors)
-      if handle_update(key, data, ttl, errors)
+      result = handle_update(key, data, ttl, errors)
+      unless result.nil?
         @healthy = true
+        handle_update_result.call(key, result, ttl) if handle_update_result
       end
     rescue => e
       # Uh oh. We stick the update back in the queue before handling the error.

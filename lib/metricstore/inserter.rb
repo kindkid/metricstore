@@ -13,7 +13,7 @@ module Metricstore
       Set.new(Array(values))
     end
 
-    def consolidate(values1, values2)
+    def consolidate_data(values1, values2)
       values1 + values2
     end
 

@@ -111,7 +111,7 @@ Or install it yourself as:
      => ['/welcome/', '/projects/']
 
     m.list(:when => "2012-04-13-17", :what => "load_time", :list => :session_id)
-    metricstore::DataLossError: Too many session_id for "2012-04-13-17", "load_time".
+    Metricstore::DataLossError: Too many session_id for "2012-04-13-17", "load_time".
 
     m.estimated_list_size(:when => "2012-04-13-17", :what => "load_time", :list => :session_id)
      => 3560831

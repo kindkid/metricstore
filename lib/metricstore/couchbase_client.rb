@@ -22,7 +22,7 @@ module Metricstore
     end
 
     # key: a string
-    # delta: a marshalable object
+    # value: a marshalable object
     # options:
     #  :ttl => Time-to-live (number of seconds from now).
     # returns: cas_version_id, or nil if the key already exists. 
