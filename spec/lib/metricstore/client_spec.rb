@@ -33,6 +33,12 @@ module Metricstore
             end
           end
 
+          @client.list_threshold = 10
+
+          (@client.list_threshold + 1).times do
+            @client.counter(:what => 'sheep', :where => {:id => rand(2**128).to_s(36)})
+          end
+
           result_path = Pathname.new(__FILE__).join('..','..','..','..','profile').expand_path
           result_path.join('calltree.data').open('w') do |f|
             RubyProf::CallTreePrinter.new(profile_data).print(f)
@@ -81,6 +87,10 @@ module Metricstore
         @client.stddev_of_ranges(:when => "2012-04-13-17", :what => "load_time", :group => :session_id).should == 15.0
 
         @client.estimated_list_size(:when => "2012-04-13-17", :what => "load_time", :list => :session_id).should == 2
+
+        expect { @client.list(:when => "2012-04-13-17", :what => "sheep", :list => :id) }.to raise_exception(Metricstore::DataLossError)
+
+        #@client.estimated_list_size(:when => "2012-04-13-17", :what => "sheep", :list => :id).should == 11
       end
     end
   end

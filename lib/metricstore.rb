@@ -1,4 +1,5 @@
 require "metricstore/version"
+require "metricstore/exceptions"
 require "metricstore/monkey_patches"
 require "metricstore/client"
 require "metricstore/couchbase_client"

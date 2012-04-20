@@ -13,7 +13,6 @@ module Metricstore
     def initialize(opts={})
       @ttl_of_hours = 31_556_926 # 1 year
       @ttl_of_group_members = 7200 # 2 hours
-      @list_threshold = 1000
 
       @kvstore = required(opts, :kvstore)
       @sleep_interval = required(opts, :sleep_interval)
@@ -30,6 +29,7 @@ module Metricstore
       }
       @open = false
       @inserter = Inserter.new(updater_options)
+      @inserter.list_threshold = 1000
       @incrementer = Incrementer.new(updater_options)
       @range_updater = RangeUpdater.new(updater_options)
       @count_incrementer = CountIncrementer.new(updater_options)
@@ -76,7 +76,14 @@ module Metricstore
 
     attr_accessor :ttl_of_hours
     attr_accessor :ttl_of_group_members
-    attr_accessor :list_threshold
+
+    def list_threshold
+      @inserter.list_threshold
+    end
+
+    def list_threshold=(threshold)
+      @inserter.list_threshold = threshold
+    end
 
     # A write method.
     # :what => a String. Required.
@@ -149,7 +156,13 @@ module Metricstore
       list_name = escape(required(args, :list).to_s)
       dimensions = (args[:where] || {}).map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       result, cas = kvstore.fetch(list_key(time_block, metric_name, list_name, dimensions))
-      result || []
+      if result == 'overflow'
+        error_message = "Too many #{args[:list]} for #{time_block}, #{args[:what]}"
+        error_message << ", where #{args[:where].inspect}" unless dimensions.empty?
+        raise(Metricstore::DataLossError, error_message)
+      else
+        result || []
+      end
     end
 
     def sum(args={})
