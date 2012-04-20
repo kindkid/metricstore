@@ -136,22 +136,27 @@ module Metricstore
       [a,b].max
     end
 
-    def reschedule_process!
+    def reschedule_process!(sleep_first)
       if @running
         if timer = @timer
           EM.cancel_timer(timer)
         end
-        @timer = EM.add_timer(sleep_interval) { process! }
+        if sleep_first
+          @timer = EM.add_timer(sleep_interval) { process! }
+        else
+          EM.next_tick { process! }
+        end
       end
     end
 
     def process!
       @timer = nil
-      until @pending_updates.empty?
+      processed = 0
+      until @pending_updates.empty? || (processed+=1) > 100
         key, update = @pending_updates.shift
         process_update(key, update[:data], update[:ttl], update[:errors] || [])
       end
-      reschedule_process!
+      reschedule_process!(@pending_updates.empty?)
     rescue => e
       handle_error(e)
     end
