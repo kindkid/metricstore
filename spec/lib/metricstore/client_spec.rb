@@ -35,7 +35,8 @@ module Metricstore
 
           @client.list_threshold = 10
 
-          (@client.list_threshold + 1).times do
+          @sheep_count = @client.list_threshold + 1
+          @sheep_count.times do
             @client.counter(:what => 'sheep', :where => {:id => rand(2**128).to_s(36)})
           end
 
@@ -47,16 +48,18 @@ module Metricstore
             RubyProf::GraphHtmlPrinter.new(profile_data).print(f)
           end
 
-          EM.add_timer(0.1) do
+          timer = EM.add_periodic_timer(0.1) do
+            if @client.backlog == 0
+              EM.cancel_timer(timer)
+              spec.run
 
-            spec.run
-
-            EM.next_tick do
-              @mock_key_value_client = nil
-              @client.close
-              @client = nil
-              EM.stop
-              Timecop.return
+              EM.next_tick do
+                @mock_key_value_client = nil
+                @client.close
+                @client = nil
+                EM.stop
+                Timecop.return
+              end
             end
           end
         end
@@ -90,7 +93,7 @@ module Metricstore
 
         expect { @client.list(:when => "2012-04-13-17", :what => "sheep", :list => :id) }.to raise_exception(Metricstore::DataLossError)
 
-        #@client.estimated_list_size(:when => "2012-04-13-17", :what => "sheep", :list => :id).should == 11
+        @client.estimated_list_size(:when => "2012-04-13-17", :what => "sheep", :list => :id).should be_within(1.1 * Client::CARDINALITY_ESTIMATOR_ERROR_RATE * @sheep_count).of (@sheep_count)
       end
     end
   end

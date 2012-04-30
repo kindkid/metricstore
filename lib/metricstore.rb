@@ -9,6 +9,7 @@ require "metricstore/count_incrementer"
 require "metricstore/incrementer"
 require "metricstore/inserter"
 require "metricstore/range_updater"
+require "metricstore/hyper_log_log"
 
 module Metricstore
   

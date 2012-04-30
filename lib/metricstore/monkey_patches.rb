@@ -25,19 +25,3 @@ end
 class Array
   include Metricstore::AllCombinations
 end
-
-class Hash
-  def all_combinations
-    if block_given?
-      self.to_a.all_combinations do |c|
-        yield Hash[c]
-      end
-    else
-      Enumerator.new do |yielder|
-        self.to_a.all_combinations do |c|
-          yielder << Hash[c]
-        end
-      end
-    end
-  end
-end
