@@ -26,6 +26,9 @@ module Metricstore
           raise(ArgumentError, "error_rate must be between 0 and 1")
         end
         @bits = HyperLogLog.bits_needed(error_rate)
+        unless (@bits + 10) <= HASH_BIT_SIZE
+          raise(ArgumentError, "error_rate is unattainable. be less picky.")
+        end
         @bucket_count = 1 << @bits
         @alpha = ALPHA[@bucket_count]
         @bucket_updater = bucket_updater
@@ -33,9 +36,14 @@ module Metricstore
 
       def add(item)
         hashed = hash_of(item)
-        bucket_index = hashed[0,@bits].to_i(2)
+        offset = HASH_BIT_SIZE - @bits
+        mask = ((1 << @bits) - 1) << offset
+        shifted_front_bits = (hashed & mask)
+        front_bits = shifted_front_bits >> offset
+        back_bits = hashed - shifted_front_bits
+        bucket_index = front_bits
         raise("BUG!") if bucket_index >= @bucket_count
-        next_on_bit_index = hashed[@bits .. -1].index('1')
+        next_on_bit_index = (HASH_BIT_SIZE - @bits).times.find{|i| back_bits[HASH_BIT_SIZE - @bits - i] == 1}
         if next_on_bit_index.nil?
           next_on_bit_index= HASH_BIT_SIZE - @bits
         else
@@ -49,7 +57,7 @@ module Metricstore
       def hash_of(item)
         sha = Digest::SHA2.new(HASH_BIT_SIZE)
         sha << item.to_s
-        "%#{HASH_BIT_SIZE}b" % sha.to_s.to_i(16)
+        sha.to_s.to_i(16)
       end
     end
 
@@ -63,7 +71,6 @@ module Metricstore
       raise("BUG!") unless m > 0
       alpha = ALPHA[m]
       raw = alpha * (m ** 2) / values.map{|x| 2 ** -(x || 0)}.inject(:+)
-      puts "raw: #{raw}, m: #{m}"
       if raw <= 2.5 * m
         # correct for being below ideal range
         zero_registers = values.count(nil)

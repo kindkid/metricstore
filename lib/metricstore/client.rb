@@ -14,13 +14,13 @@ module Metricstore
     #                         Set this <= max_unhandled_errors.
     def initialize(opts={})
       @ttl_of_hours = 31_556_926 # 1 year
-      @ttl_of_group_members = 7200 # 2 hours
 
       @kvstore = required(opts, :kvstore)
       @sleep_interval = required(opts, :sleep_interval)
       @max_healthy_errors = required(opts, :max_healthy_errors)
       @max_unhandled_errors = required(opts, :max_unhandled_errors)
       @max_retry_delay_in_seconds = required(opts, :max_retry_delay_in_seconds)
+      @max_ttl_of_dimension = {}
 
       updater_options = {
         :kvstore => @kvstore,
@@ -82,7 +82,7 @@ module Metricstore
     end
 
     attr_accessor :ttl_of_hours
-    attr_accessor :ttl_of_group_members
+    attr_accessor :max_ttl_of_dimension
 
     def list_threshold
       inserter.list_threshold
@@ -99,23 +99,25 @@ module Metricstore
     # Time complexity of this method grows factorially with the size of the :where hash.
     def counter(args={})
       assert_open!
-      date = stringify_date((args[:when] || Time.now).utc)
+      hour = date_as_hour((args[:when] || Time.now).utc)
       metric = escape(required(args, :what).to_s)
-      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v)] }
+      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v), max_ttl_of_dimension[k]] }
       where.all_combinations do |dimensions|
-        key = counter_key(date, metric, dimensions.sort.map{|k,v,s| s}.join('&'))
-        count_incrementer.increment(key, 1, ttl_of_hours)
+        key = counter_key(hour, metric, dimensions.sort.map{|k,v,s,ttl| s}.join('&'))
+        ttl = (dimensions.map{|k,v,s,ttl| ttl} << ttl_of_hours).compact.min
+        count_incrementer.increment(key, 1, ttl)
       end
       where.size.times do |i|
         where2 = where.clone
         list, dimension_value, _ = where2.delete_at(i)
         list = escape(list)
-        key_middle = "#{date}/#{metric}/#{list}?"
+        key_middle = "#{hour}/#{metric}/#{list}?"
         where2.all_combinations do |dimensions|
-          key_suffix = "#{key_middle}#{dimensions.sort.map{|k,v,s| s}.join('&')}"
-          inserter.insert("list:/#{key_suffix}", dimension_value, ttl_of_hours)
+          key_suffix = "#{key_middle}#{dimensions.sort.map{|k,v,s,ttl| s}.join('&')}"
+          ttl = (dimensions.map{|k,v,s,ttl| ttl} << ttl_of_hours).compact.min
+          inserter.insert("list:/#{key_suffix}", dimension_value, ttl)
           estimator = HyperLogLog::Builder.new(CARDINALITY_ESTIMATOR_ERROR_RATE, Proc.new do |idx, val|
-            range_updater.update_range("hyperloglog:#{idx.to_i}:/#{key_suffix}", val, ttl_of_hours)
+            range_updater.update_range("hyperloglog:#{idx.to_i}:/#{key_suffix}", val, ttl)
           end)
           estimator.add(dimension_value)
         end
@@ -131,27 +133,29 @@ module Metricstore
     def measure(args={})
       assert_open!
       value = required(args, :value).to_i
-      date = stringify_date((args[:when] || Time.now).utc)
+      hour = date_as_hour((args[:when] || Time.now).utc)
       metric = escape(required(args, :what).to_s)
-      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v)] }
+      where = (args[:where] || {}).map{|k,v| [k, v, escape(k) << '=' << escape(v), max_ttl_of_dimension[k]] }
       where.all_combinations do |dimensions|
-        dimensions_string = dimensions.sort.map{|k,v,s| s}.join('&')
-        suffix = build_key('', date, metric, dimensions_string)
-        count_incrementer.increment("count#{suffix}", 1, ttl_of_hours)
-        incrementer.increment("sum#{suffix}", value, ttl_of_hours)
-        range_updater.update_range("range#{suffix}", value, ttl_of_hours)
-        incrementer.increment("sumsqr#{suffix}", value*value, ttl_of_hours)
+        dimensions_string = dimensions.sort.map{|k,v,s,ttl| s}.join('&')
+        ttl = (dimensions.map{|k,v,s,ttl| ttl} << ttl_of_hours).compact.min
+        suffix = build_key('', hour, metric, dimensions_string)
+        count_incrementer.increment("count#{suffix}", 1, ttl)
+        incrementer.increment("sum#{suffix}", value, ttl)
+        range_updater.update_range("range#{suffix}", value, ttl)
+        incrementer.increment("sumsqr#{suffix}", value*value, ttl)
       end
       where.size.times do |i|
         where2 = where.clone
         list, dimension_value, _ = where2.delete_at(i)
         list = escape(list)
-        key_middle = "#{date}/#{metric}/#{list}?"
+        key_middle = "#{hour}/#{metric}/#{list}?"
         where2.all_combinations do |dimensions|
-          key_suffix = "#{key_middle}#{dimensions.sort.map{|k,v,s| s}.join('&')}"
-          inserter.insert("list:/#{key_suffix}", dimension_value, ttl_of_hours)
+          key_suffix = "#{key_middle}#{dimensions.sort.map{|k,v,s,ttl| s}.join('&')}"
+          ttl = (dimensions.map{|k,v,s,ttl| ttl} << ttl_of_hours).compact.min
+          inserter.insert("list:/#{key_suffix}", dimension_value, ttl)
           estimator = HyperLogLog::Builder.new(CARDINALITY_ESTIMATOR_ERROR_RATE, Proc.new do |idx, val|
-            range_updater.update_range("hyperloglog:#{idx.to_i}:/#{key_suffix}", val, ttl_of_hours)
+            range_updater.update_range("hyperloglog:#{idx.to_i}:/#{key_suffix}", val, ttl)
           end)
           estimator.add(dimension_value)
         end
@@ -159,7 +163,7 @@ module Metricstore
     end
 
     def count(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       result, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
@@ -167,7 +171,7 @@ module Metricstore
     end
 
     def list(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       list_name = escape(required(args, :list).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
@@ -182,7 +186,7 @@ module Metricstore
     end
 
     def sum(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       result, cas = kvstore.fetch(sum_key(time_block, metric_name, dimensions))
@@ -190,7 +194,7 @@ module Metricstore
     end
 
     def average(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       count, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
@@ -200,7 +204,7 @@ module Metricstore
     end
 
     def maximum(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       range, cas = kvstore.fetch(range_key(time_block, metric_name, dimensions))
@@ -208,7 +212,7 @@ module Metricstore
     end
 
     def minimum(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       range, cas = kvstore.fetch(range_key(time_block, metric_name, dimensions))
@@ -216,7 +220,7 @@ module Metricstore
     end
 
     def stddev(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       count, cas = kvstore.fetch(counter_key(time_block, metric_name, dimensions))
@@ -228,7 +232,7 @@ module Metricstore
 
     def count_of_groups(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       result, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
@@ -237,7 +241,7 @@ module Metricstore
 
     def sum_of_ranges(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       result, cas = kvstore.fetch(range_sum_key(time_block, metric_name, group, dimensions))
@@ -246,7 +250,7 @@ module Metricstore
 
     def average_range(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       count, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
@@ -257,7 +261,7 @@ module Metricstore
 
     def maximum_range(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       range, cas = kvstore.fetch(group_range_key(time_block, metric_name, group, dimensions))
@@ -266,7 +270,7 @@ module Metricstore
 
     def minimum_range(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       range, cas = kvstore.fetch(group_range_key(time_block, metric_name, group, dimensions))
@@ -275,7 +279,7 @@ module Metricstore
 
     def stddev_of_ranges(args={})
       group = escape(required(args, :group))
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
       count, cas = kvstore.fetch(group_counter_key(time_block, metric_name, group, dimensions))
@@ -286,7 +290,7 @@ module Metricstore
     end
 
     def estimated_list_size(args={})
-      time_block = required(args, :when)
+      time_block = required(args, :hour)
       metric_name = escape(required(args, :what).to_s)
       list_name = escape(required(args, :list).to_s)
       dimensions = (args[:where] || {}).sort.map{|k,v| escape(k) << '=' << escape(v)}.join('&')
@@ -319,15 +323,15 @@ module Metricstore
     attr_reader :max_unhandled_errors
     attr_reader :max_retry_delay_in_seconds
 
-    def stringify_date(date)
+    def date_as_hour(date)
       date.strftime('%Y-%m-%d-%H')
     end
 
-    def build_key(prefix, date, metric, dimensions, list_group=nil)
+    def build_key(prefix, time_block, metric, dimensions, list_group=nil)
       key = ''
       key << prefix
       key << ':/'
-      key << date
+      key << time_block
       key << '/'
       key << metric
       unless list_group.nil?
@@ -339,48 +343,48 @@ module Metricstore
       key
     end
 
-    def counter_key(date, metric, dimensions)
-      build_key('count', date, metric, dimensions)
+    def counter_key(time_block, metric, dimensions)
+      build_key('count', time_block, metric, dimensions)
     end
 
-    def list_key(date, metric, list_name, dimensions)
-      build_key('list', date, metric, dimensions, list_name)
+    def list_key(time_block, metric, list_name, dimensions)
+      build_key('list', time_block, metric, dimensions, list_name)
     rescue Exception => e
       puts e.message
       puts e.backtrace
       raise
     end
 
-    def sum_key(date, metric, dimensions)
-      build_key('sum', date, metric, dimensions)
+    def sum_key(time_block, metric, dimensions)
+      build_key('sum', time_block, metric, dimensions)
     end
 
-    def sumsqr_key(date, metric, dimensions)
-      build_key('sumsqr', date, metric, dimensions)
+    def sumsqr_key(time_block, metric, dimensions)
+      build_key('sumsqr', time_block, metric, dimensions)
     end
 
-    def range_key(date, metric, dimensions)
-      build_key('range', date, metric, dimensions)
+    def range_key(time_block, metric, dimensions)
+      build_key('range', time_block, metric, dimensions)
     end
 
-    def group_counter_key(date, metric, group_name, dimensions)
-      build_key('rangecount', date, metric, dimensions, group_name)
+    def group_counter_key(time_block, metric, group_name, dimensions)
+      build_key('rangecount', time_block, metric, dimensions, group_name)
     end
 
-    def group_range_key(date, metric, group_name, dimensions)
-      build_key('rangerange', date, metric, dimensions, group_name)
+    def group_range_key(time_block, metric, group_name, dimensions)
+      build_key('rangerange', time_block, metric, dimensions, group_name)
     end
 
-    def range_sum_key(date, metric, group_name, dimensions)
-      build_key('rangesum', date, metric, dimensions, group_name)
+    def range_sum_key(time_block, metric, group_name, dimensions)
+      build_key('rangesum', time_block, metric, dimensions, group_name)
     end
 
-    def range_sumsqr_key(date, metric, group_name, dimensions)
-      build_key('rangesumsqr', date, metric, dimensions, group_name)
+    def range_sumsqr_key(time_block, metric, group_name, dimensions)
+      build_key('rangesumsqr', time_block, metric, dimensions, group_name)
     end
 
-    def hyperloglog_key(index, date, metric, list_name, dimensions)
-      build_key("hyperloglog:#{index.to_i}", date, metric, dimensions, list_name)
+    def hyperloglog_key(index, time_block, metric, list_name, dimensions)
+      build_key("hyperloglog:#{index.to_i}", time_block, metric, dimensions, list_name)
     end
 
     def required(args, argument_name)

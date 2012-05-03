@@ -31,7 +31,7 @@ Or install it yourself as:
 
     # Configure...
     m.ttl_of_hours = 31_556_926 # 1 year, default
-    m.ttl_of_group_members = 7200 # 2 hours, default
+    m.max_ttl_of_dimension[:session_id] = 7200 # 2 hours
     m.list_threshold = 1000 # default
 
     # (Suppose that the current time is 17:05 UTC on April 13, 2012.)
@@ -85,10 +85,13 @@ Or install it yourself as:
      => ['/welcome/']
 
     # We can do queries related to groups as well, with some limitations.
-    # We only guarantee the accuracy of the result if all related data was
-    # loaded from start-to-finish within :ttl_of_group_members seconds.
+    # We only guarantee the accuracy of a particular group summary if for every
+    # member in the group, all the metrics related to that member were loaded
+    # from start-to-finish before the preceeding such metric expired its TTL.
+    #
     # Note: a range is the difference between the minimum and maximum metric,
     # for an individual group.
+
     m.count_of_groups(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 2
     m.sum_of_ranges(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)

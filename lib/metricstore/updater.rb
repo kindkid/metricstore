@@ -152,7 +152,7 @@ module Metricstore
     def process!
       @timer = nil
       processed = 0
-      until @pending_updates.empty? || (processed+=1) > 100
+      until @pending_updates.empty? || (processed+=1) > 10
         key, update = @pending_updates.shift
         process_update(key, update[:data], update[:ttl], update[:errors] || [])
       end
