@@ -61,6 +61,27 @@ module Metricstore
       end
     end
 
+    # Use of this method is discouraged.
+    # Set up your own EventMachine reactor instead.
+    # Nevertheless, for a one-off, infrequent connection, this works too.
+    def run(&callback)
+      require 'em-synchrony'
+      raise("Already running") if @open
+      EM.synchrony do
+        open
+        callback.call
+        timer = EM.add_periodic_timer(0.01) do
+          if backlog == 0
+            EM.cancel_timer(timer)
+            EM.next_tick do
+              close
+              EM.stop
+            end
+          end
+        end
+      end
+    end
+
     def open
       inserter.start!
       incrementer.start!

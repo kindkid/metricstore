@@ -34,6 +34,9 @@ Or install it yourself as:
     m.max_ttl_of_dimension[:session_id] = 7200 # 2 hours
     m.list_threshold = 1000 # default
 
+    # Open the connection
+    m.open
+
     # (Suppose that the current time is 17:05 UTC on April 13, 2012.)
 
     m.counter(:when => Time.now, :what => "logins", :where =>
@@ -118,6 +121,20 @@ Or install it yourself as:
     m.estimated_list_size(:when => "2012-04-13-17", :what => "load_time", :list => :session_id)
      => 3560831
 
+    m.close
+
+## EventMachine
+
+The Metricstore client's write methods (counter, measure) are designed to run
+within an [EventMachine](http://rubyeventmachine.com/) reactor. This allows
+writes to be batched up together (only when there's a backlog), and to re-try
+in the case of intermittent connection problems or other non-fatal errors. You
+will want to design your app to leave the reactor running.
+
+If it does not make sense to leave a reactor running in your app, you can
+make your updates within a temporary reactor using the client's "run" method.
+Be aware though, that the "run" method itself will block until the write backlog
+is clear again.
 
 ## Contributing
 
