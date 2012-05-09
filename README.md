@@ -57,34 +57,34 @@ Or install it yourself as:
 
     # Now we can query...
 
-    m.count(:when => "2012-04-13-17", :what => "logins")
+    m.count(:hour => "2012-04-13-17", :what => "logins")
      => 3
-    m.list(:when => "2012-04-13-17", :what => "logins", :list => :user)
+    m.list(:hour => "2012-04-13-17", :what => "logins", :list => :user)
      => ['joe', 'bob']
-    m.count(:when => "2012-04-13-17", :what => "logins", :where => {:user => 'joe'})
+    m.count(:hour => "2012-04-13-17", :what => "logins", :where => {:user => 'joe'})
      => 2
-    m.count(:when => "2012-04-13-17", :what => "logins", :where => {:user => 'bob'})
+    m.count(:hour => "2012-04-13-17", :what => "logins", :where => {:user => 'bob'})
      => 1
-    m.list(:when => "2012-04-13-17", :what => "logins", :where => {:user => 'joe'}, :list => :ip)
+    m.list(:hour => "2012-04-13-17", :what => "logins", :where => {:user => 'joe'}, :list => :ip)
      => ['10.20.30.40', '10.20.30.50']
-    m.list(:when => "2012-04-13-17", :what => "logins", :where => {:user => 'bob'}, :list => :ip)
+    m.list(:hour => "2012-04-13-17", :what => "logins", :where => {:user => 'bob'}, :list => :ip)
      => ['10.20.30.40']
-    m.count(:when => "2012-04-13-17", :what => "logins", :where => {:user => 'joe', :ip => '10.20.30.40'})
+    m.count(:hour => "2012-04-13-17", :what => "logins", :where => {:user => 'joe', :ip => '10.20.30.40'})
      => 1
 
-    m.count(:when => "2012-04-13-17", :what => "load_time")
+    m.count(:hour => "2012-04-13-17", :what => "load_time")
      => 4
-    m.sum(:when => "2012-04-13-17", :what => "load_time")
+    m.sum(:hour => "2012-04-13-17", :what => "load_time")
      => 1396
-    m.average(:when => "2012-04-13-17", :what => "load_time")
+    m.average(:hour => "2012-04-13-17", :what => "load_time")
      => 349.0
-    m.maximum(:when => "2012-04-13-17", :what => "load_time")
+    m.maximum(:hour => "2012-04-13-17", :what => "load_time")
      => 501
-    m.minimum(:when => "2012-04-13-17", :what => "load_time")
+    m.minimum(:hour => "2012-04-13-17", :what => "load_time")
      => 212
-    m.stddev(:when => "2012-04-13-17", :what => "load_time")
+    m.stddev(:hour => "2012-04-13-17", :what => "load_time")
      => 102.45730818248154
-    m.list(:when => "2012-04-13-17", :what => "load_time", :list => :page)
+    m.list(:hour => "2012-04-13-17", :what => "load_time", :list => :page)
      => ['/welcome/']
 
     # We can do queries related to groups as well, with some limitations.
@@ -95,30 +95,30 @@ Or install it yourself as:
     # Note: a range is the difference between the minimum and maximum metric,
     # for an individual group.
 
-    m.count_of_groups(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.count_of_groups(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 2
-    m.sum_of_ranges(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.sum_of_ranges(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 286
-    m.average_range(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.average_range(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 143
-    m.maximum_range(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.maximum_range(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 158
-    m.minimum_range(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.minimum_range(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 128
-    m.stddev_of_ranges(:when => "2012-04-13-17", :what => "load_time", :group => :session_id)
+    m.stddev_of_ranges(:hour => "2012-04-13-17", :what => "load_time", :group => :session_id)
      => 15.0
 
 
     # Supposing there were instead millions of counter and measure operations,
     # metricstore may reach its list_threshold. Some queries will fail.
 
-    m.list(:when => "2012-04-13-17", :what => "load_time", :list => :page)
+    m.list(:hour => "2012-04-13-17", :what => "load_time", :list => :page)
      => ['/welcome/', '/projects/']
 
-    m.list(:when => "2012-04-13-17", :what => "load_time", :list => :session_id)
+    m.list(:hour => "2012-04-13-17", :what => "load_time", :list => :session_id)
     Metricstore::DataLossError: Too many session_id for "2012-04-13-17", "load_time".
 
-    m.estimated_list_size(:when => "2012-04-13-17", :what => "load_time", :list => :session_id)
+    m.estimated_list_size(:hour => "2012-04-13-17", :what => "load_time", :list => :session_id)
      => 3560831
 
     m.close
